@@ -1,0 +1,92 @@
+cabal-version: 3.0
+name: specftacular
+build-type: Simple
+version: 0.0.1
+author: Matthías Páll Gissurarson
+maintainer: mpg@mpg.is
+synopsis: ECTA-based QuickSpec
+description:
+
+  Specftacular (formerly Spectacular) is a rewrite of QuickSpec based on the state-of-the-art ECTA (equality-constrained tree automata)
+  technique for fun and profit (?).
+
+category: Synthesis
+license: MIT
+license-file: LICENSE
+
+common deps
+  default-language: Haskell2010
+  build-depends: base ^>= 4.22,
+                 text,
+                 containers,
+                 cfta,
+                 QuickCheck >= 2.15 && < 2.19,
+                 hashable,
+                 unordered-containers
+
+
+library
+  import: deps
+  hs-source-dirs: src
+  exposed-modules:
+    Spectacular,
+    Spectacular.Types,
+    Spectacular.Utils,
+    Spectacular.DecisionTree,
+    Spectacular.Rewriting
+
+
+executable specftacular
+  import: deps
+  hs-source-dirs: exe
+  ghc-options: -O2 -threaded -rtsopts
+  build-depends: specftacular
+  main-is: Main.hs
+
+-- The benchmark signatures. Each takes the size and the phase as arguments.
+common bench
+  import: deps
+  hs-source-dirs: benchmarks
+  ghc-options: -O2 -threaded -rtsopts
+  build-depends: specftacular
+
+executable bench-lists
+  import: bench
+  main-is: Lists.hs
+
+executable bench-list-monad
+  import: bench
+  main-is: ListMonad.hs
+
+executable bench-octonions
+  import: bench
+  main-is: Octonions.hs
+
+executable bench-huge-lists
+  import: bench
+  main-is: HugeLists.hs
+
+executable bench-regex
+  import: bench
+  main-is: Regex.hs
+  build-depends: mtl
+
+executable example-gcd
+  import: deps
+  hs-source-dirs: examples
+  ghc-options: -O2 -threaded -rtsopts
+  build-depends: specftacular
+  main-is: Gcd.hs
+
+-- Runs small signatures and compares their laws with test/golden.
+-- GOLDEN_ACCEPT=1 writes the files again.
+test-suite golden
+  import: deps
+  type: exitcode-stdio-1.0
+  hs-source-dirs: test
+  main-is: Golden.hs
+  ghc-options: -threaded -rtsopts "-with-rtsopts=-M4G"
+  build-depends: specftacular
+
+
+
