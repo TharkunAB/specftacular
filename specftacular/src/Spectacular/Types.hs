@@ -418,14 +418,30 @@ evalTerm sig tc (Term (Symbol sym) _) =
       _ -> error ("evalTerm: symbol not found: " ++ T.unpack sym)
 
 -- | The test cases of a signature: a value for each generated variable.
--- Test case k has the size k mod 100, as the k-th test of QuickCheck has
--- with its default maximum size. Each variable takes its value from a seed
--- of its own, so a variable has the same values in each phase.
+-- Test case k has the size k of 'testSizes'. Each variable takes its value
+-- from a seed of its own, so a variable has the same values in each phase.
 testCases :: Int -> Sig -> [VarVals]
 testCases n sig =
-    [ Map.fromList [ (v, value g k v) | (v, GivenFun {given_info = GivenVar _ _ g}) <- Map.assocs sig ]
-    | k <- [0 .. n - 1] ]
-  where value (DynGen g) k v = toDyn (unGen g (mkQCGen (hash (k, v))) (k `mod` 100))
+    [ Map.fromList [ (v, value g k size v) | (v, GivenFun {given_info = GivenVar _ _ g}) <- Map.assocs sig ]
+    | (k, size) <- zip [0 :: Int ..] (testSizes n) ]
+  where value (DynGen g) k size v = toDyn (unGen g (mkQCGen (hash (k, v))) size)
+
+-- | The sizes of n test cases, as QuickSpec chooses them (run in
+-- QuickSpec.Internal.Testing.QuickCheck of quickspec-2.2.2). 1% of the test
+-- cases have the size 0. The others are biased towards small sizes: the
+-- size is the maximum size 100 minus the cube root of a number that is
+-- spread evenly over [0, 100^3).
+testSizes :: Int -> [Int]
+testSizes n =
+    replicate zeroes 0
+    ++ reverse [ maxSize - truncate (fromIntegral u ** (1 / 3) :: Double) | u <- uniform others (maxSize ^ (3 :: Int)) ]
+  where
+    others = ceiling (fromIntegral n * (1 - 0.01 :: Double))
+    zeroes = n - others
+    maxSize = 100
+    -- m numbers spread evenly over [0, k), as uniform in QuickSpec.
+    uniform m k = concat [ replicate (m `div` k) i | i <- [0 .. k - 1] ]
+                  ++ [ i * k `div` (m `mod` k) | i <- [0 .. m `mod` k - 1] ]
 
 -- | Whether two values are equal, by the equality of their type. Nothing
 -- means that the comparison threw an exception.
