@@ -1,4 +1,4 @@
-Baseline of the laws that Spectacular finds.
+Baseline of the laws that Specftacular finds.
 
 GHC 9.14.1, cfta 7bfb69d1, on the WSL2 development machine, for
 the code of the commit that holds this file. Each run is phase 1 with

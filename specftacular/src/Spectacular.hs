@@ -194,11 +194,11 @@ discoverMonomorphic size = experimentalPhases size 1
 -- (see 'unsafeApply').
 experimentalPhases :: Int -> Int -> (TypeSkeleton -> Maybe GeneratedInstance) -> [Sig] -> IO [String]
 experimentalPhases size phase extraReps sigs =
-    do -- SPECTACULAR_PROGRESS=1 shows the progress of the search on stderr.
-       progress <- (== Just "1") <$> Env.lookupEnv "SPECTACULAR_PROGRESS"
-       -- SPECTACULAR_TESTS sets the number of test cases (1000 by default,
+    do -- SPECFTACULAR_PROGRESS=1 shows the progress of the search on stderr.
+       progress <- (== Just "1") <$> Env.lookupEnv "SPECFTACULAR_PROGRESS"
+       -- SPECFTACULAR_TESTS sets the number of test cases (1000 by default,
        -- as in QuickSpec).
-       numTests <- fromMaybe 1000 . (>>= TR.readMaybe) <$> Env.lookupEnv "SPECTACULAR_TESTS"
+       numTests <- fromMaybe 1000 . (>>= TR.readMaybe) <$> Env.lookupEnv "SPECFTACULAR_TESTS"
        let sig = mconcat sigs
            StEcta { compl_sig = compl_sig,
                     arb_insts = arb_insts,
