@@ -6,7 +6,8 @@ module Spectacular (
     module Data.Proxy,
     tacularSpec,
     discoverMonomorphic,
-    experimentalPhases
+    experimentalPhases,
+    searchPhases
 ) where
 
 import qualified Data.Map.Strict as Map
@@ -193,16 +194,21 @@ discoverMonomorphic size = experimentalPhases size 1
 -- a value to an argument of another type. The search does not test such a
 -- term (see 'termType').
 experimentalPhases :: Int -> Int -> (TypeSkeleton -> Maybe GeneratedInstance) -> [Sig] -> IO [String]
-experimentalPhases size phase extraReps sigs =
+experimentalPhases size phase extraReps sigs = searchPhases size phase (frontInstances extraReps) (mconcat sigs)
+
+-- | 'experimentalPhases' with the instances of the types for the search,
+-- for a front end that does not give the types of the values to Haskell,
+-- such as a GHC session.
+searchPhases :: Int -> Int -> (TypeSkeleton -> Maybe Instance) -> Sig -> IO [String]
+searchPhases size phase instances sig =
     do -- SPECFTACULAR_PROGRESS=1 shows the progress of the search on stderr.
        progress <- (== Just "1") <$> Env.lookupEnv "SPECFTACULAR_PROGRESS"
        -- SPECFTACULAR_TESTS sets the number of test cases (1000 by default,
        -- as in QuickSpec).
        numTests <- fromMaybe 1000 . (>>= TR.readMaybe) <$> Env.lookupEnv "SPECFTACULAR_TESTS"
-       let sig = mconcat sigs
-           StEcta { compl_sig = compl_sig,
+       let StEcta { compl_sig = compl_sig,
                     arb_insts = arb_insts,
-                    sig_ty_cons = sig_ty_cons} = mkStecta size numTests extraReps sig id id
+                    sig_ty_cons = sig_ty_cons} = mkStecta size numTests instances sig id id
        putStrLn $ "In Scope (" ++ show (Map.size compl_sig) ++ " functions/constants):"
        putStrLn "---------------------------------"
        mapM_ (putStrLn . T.unpack) $ Map.keys compl_sig
@@ -219,7 +225,7 @@ experimentalPhases size phase extraReps sigs =
        putStrLn "Laws according to Haskell's (==):"
        putStrLn "---------------------------------"
        let env = Settings { progress = progress, numTests = numTests, maxSize = size }
-       runPhases env size (max 1 (min 4 phase)) extraReps sig
+       runPhases env size (max 1 (min 4 phase)) instances sig
 
 -- 1. The runtime signature and the search space.
 
@@ -227,9 +233,9 @@ experimentalPhases size phase extraReps sigs =
 -- with the generated variables and the equalities, the node of the atoms,
 -- and the types to test. The first function changes the types of the
 -- generated variables, and the second the types of the functions.
-mkStecta :: Int -> Int -> (TypeSkeleton -> Maybe GeneratedInstance) -> Sig
+mkStecta :: Int -> Int -> (TypeSkeleton -> Maybe Instance) -> Sig
          -> (TypeSkeleton -> TypeSkeleton) -> (TypeSkeleton -> TypeSkeleton) -> StEcta
-mkStecta size numTests extraReps sig givenTrans skelTrans =
+mkStecta size numTests instances sig givenTrans skelTrans =
          StEcta { any_arg = ag,
                   compl_sig = compl_sig,
                   given_sig = givenSig,
@@ -245,7 +251,7 @@ mkStecta size numTests extraReps sig givenTrans skelTrans =
         moreVars = [ (x, [ (gvToName gv, g) | g@(GivenFun gv _) <- take (max variablesPerType size) (moreGenerators f) ])
                    | (x, f@(GivenFun {given_info = GivenVar {}})) <- Map.assocs compl_sig ]
         inst_sig = Map.fromList (concatMap snd moreVars) <> compl_sig
-        (givenSig, eq_insts, arbs) = sigGivens givenTrans sig extraReps
+        (givenSig, eq_insts, arbs) = sigGivens givenTrans sig instances
         givens = Map.assocs $ givenTrans . sfTypeRep <$> givenSig
         compl_sig = sig <> givenSig
         sc = skels ++ givens
@@ -272,8 +278,8 @@ phases =
 
 -- | Run the phases from 1 to the given phase. The search state goes from
 -- one phase to the next.
-runPhases :: Settings -> Int -> Int -> (TypeSkeleton -> Maybe GeneratedInstance) -> Sig -> IO [String]
-runPhases env size lastPhase extraReps sig =
+runPhases :: Settings -> Int -> Int -> (TypeSkeleton -> Maybe Instance) -> Sig -> IO [String]
+runPhases env size lastPhase instances sig =
     go (zip [1..] phases) Search { seen = HS.empty,
                                    trees = Map.empty,
                                    instance_trees = Map.empty,
@@ -285,7 +291,7 @@ runPhases env size lastPhase extraReps sig =
     go ((pn, (finished, starting, givenTrans, skelTrans)) : rest) s
       | pn <= lastPhase = do
           when (pn > 1) $ putStrLn starting
-          (laws, s') <- runPhase env size (mkStecta size (numTests env) extraReps sig givenTrans skelTrans) s
+          (laws, s') <- runPhase env size (mkStecta size (numTests env) instances sig givenTrans skelTrans) s
           putStrLn $ finished ++ show (so_far s') ++ " terms examined."
           putStrLn $ show (sum $ map DT.size $ Map.elems (trees s')) ++ " unique terms discovered."
           (laws ++) <$> go rest s'

@@ -82,14 +82,67 @@ data GeneratedInstance = Gend {
     g_li_i :: GeneratedInstance
     }
 
-sigGivens :: (TypeSkeleton -> TypeSkeleton) -> Sig -> (TypeSkeleton -> (Maybe GeneratedInstance))
+-- | The generator and the equality of a type, for the search: the type as
+-- 'TypeRep' shows it, the prefix of the names of its variables, the
+-- generator, and the equality, if the type has one.
+data Instance = Instance {
+    inst_text :: Text,
+    inst_prefix :: Text,
+    inst_gen :: Generator,
+    inst_eq :: Maybe Value
+    }
+
+-- | The instance of a generated instance.
+toInstance :: GeneratedInstance -> Instance
+toInstance rep = Instance { inst_text = T.pack (show (g_tr rep))
+                          , inst_prefix = namePrefix (g_tr rep)
+                          , inst_gen = generator (g_arb rep)
+                          , inst_eq = dynamicValue <$> g_eq rep }
+
+-- | The instances of the types that the signatures of the benchmarks use
+-- (see 'builtinReps'), of A to Acc for the type variables, of the lists of
+-- these, and of the types that the function gives.
+frontInstances :: (TypeSkeleton -> Maybe GeneratedInstance) -> TypeSkeleton -> Maybe Instance
+frontInstances extraReps = fmap toInstance . genRep
+  where
+        genRep :: TypeSkeleton -> Maybe GeneratedInstance
+        genRep (TVar a) | Just t <- lookup a [ (v, t) | (t, v) <- carriers ] = genRep t
+        genRep t | Just g <- lookup t builtinReps = Just g
+        genRep (TCons "[]" [ts]) = g_li_i <$> genRep ts
+        genRep (TFun _ _) = Nothing
+        --- To allow for types not considered here
+        --- Not sure if this is the best way to go about it
+        genRep x = 
+          case extraReps x of 
+            Just t -> Just t
+            Nothing -> trace ("*** Warning: Could not generate instances for '" ++ (show x) ++ "', ignoring...") Nothing
+
+-- | The types of a signature that the search needs instances of: the
+-- types of the functions, their parts, and the lists of these types, after
+-- the function changes them.
+instanceTypes :: (TypeSkeleton -> TypeSkeleton) -> Sig -> [TypeSkeleton]
+instanceTypes typeMod sigs = nubOrd $ concatMap addLi $ Set.toList $ Set.unions $ map cons trs
+  where trs = map (typeMod . sfTypeRep) $ Map.elems sigs
+        -- we specialcase lists
+        cons :: TypeSkeleton -> Set TypeSkeleton
+        cons t@(TCons _ r) = Set.unions $ (Set.singleton t):(map cons r)
+        cons t@(TFun arg ret) = Set.singleton t <> cons arg <> cons ret
+        cons (TVar _) = Set.empty
+        addLi :: TypeSkeleton -> [TypeSkeleton]
+        addLi t = t:(addLi' 1 t) -- bump this to get more [A], [[A]],
+                                 -- [[[A]]], etc.
+          where addLi' :: Int -> TypeSkeleton -> [TypeSkeleton]
+                addLi' 0 _ = []
+                addLi' n t = t':(addLi' (n-1) t')
+                 where t' = TCons "[]" [t]
+
+sigGivens :: (TypeSkeleton -> TypeSkeleton) -> Sig -> (TypeSkeleton -> Maybe Instance)
           -> (Sig, Map TypeSkeleton (Text, Value, Maybe TypeRep) , Map TypeSkeleton (Text,Func))
-sigGivens typeMod sigs extraReps = (
+sigGivens typeMod sigs instances = (
                    Map.fromList (mapMaybe consName allCons)
                  , eq_insts
                  , arbs)
-  where trs = map (typeMod . sfTypeRep) $ Map.elems sigs
-        user_eq = mapMaybe g_eq $ Map.assocs sigs
+  where user_eq = mapMaybe g_eq $ Map.assocs sigs
           where g_eq (k, GivenFun (GivenInst _ eq t) tsk)  = Just (tsk, (k, eq, t))
                 g_eq _ = Nothing
         eq_insts = Map.fromList $ user_eq ++
@@ -106,44 +159,18 @@ sigGivens typeMod sigs extraReps = (
         
         isCon (TCons _ _) = True
         isCon _ = False
-        -- we specialcase lists
-        cons :: TypeSkeleton -> Set TypeSkeleton
-        cons t@(TCons _ r) = Set.unions $ (Set.singleton t):(map cons r)
-        cons t@(TFun arg ret) = Set.singleton t <> cons arg <> cons ret
-        cons (TVar _) = Set.empty
-        addLi :: TypeSkeleton -> [TypeSkeleton]
-        addLi t = t:(addLi' 1 t) -- bump this to get more [A], [[A]],
-                                 -- [[[A]]], etc.
-          where addLi' :: Int -> TypeSkeleton -> [TypeSkeleton]
-                addLi' 0 _ = []
-                addLi' n t = t':(addLi' (n-1) t')
-                 where t' = TCons "[]" [t]
-                
-        allCons = nubOrd $ concatMap addLi $ Set.toList $ Set.unions $ map cons trs
-        toEqInst e | Just rep <- genRep e,
-                     Just eqf <- g_eq rep = g rep eqf
-           where g rep eqf = Just ("<@Eq_"<>(T.pack $ show $ g_tr rep)<>"@>",
-                                   GivenFun (GivenInst (T.pack (show (g_tr rep))) (dynamicValue eqf) (Just (g_tr rep)))
-                                   $ TCons "Eq" [e])
+        allCons = instanceTypes typeMod sigs
+        toEqInst e | Just inst <- instances e,
+                     Just eqf <- inst_eq inst = g inst eqf
+           where g inst eqf = Just ("<@Eq_" <> inst_text inst <> "@>",
+                                    GivenFun (GivenInst (inst_text inst) eqf (generatorType (inst_gen inst)))
+                                    $ TCons "Eq" [e])
         toEqInst _ = Nothing
 
         consName :: TypeSkeleton -> Maybe (Text, Func)
-        consName t = g <$> genRep t
-           where g rep = toTup (GivenFun (givenVar (g_tr rep) 0 (generator (g_arb rep))) t)
+        consName t = g <$> instances t
+           where g inst = toTup (GivenFun (GivenVar (inst_prefix inst) (inst_text inst) 0 (inst_gen inst)) t)
                  toTup gf@(GivenFun gv _) = (gvToName gv, gf)
-        
-
-        genRep :: TypeSkeleton -> Maybe GeneratedInstance
-        genRep (TVar a) | Just t <- lookup a [ (v, t) | (t, v) <- carriers ] = genRep t
-        genRep t | Just g <- lookup t builtinReps = Just g
-        genRep (TCons "[]" [ts]) = g_li_i <$> genRep ts
-        genRep (TFun _ _) = Nothing
-        --- To allow for types not considered here
-        --- Not sure if this is the best way to go about it
-        genRep x = 
-          case extraReps x of 
-            Just t -> Just t
-            Nothing -> trace ("*** Warning: Could not generate instances for '" ++ (show x) ++ "', ignoring...") Nothing
 
 addExplicitEquality :: Typeable a => (a -> a -> Bool) -> Sig
 addExplicitEquality (fun :: a -> a -> Bool) = Map.singleton key val
@@ -286,11 +313,15 @@ data GivenInfo
 -- list variable starts with xs, of a function variable with f, and of any
 -- other variable with x.
 givenVar :: TypeRep -> Int -> Generator -> GivenInfo
-givenVar tr = GivenVar prefix (T.pack (show tr))
-  where prefix = case typeConName (typeRepTyCon tr) of
-                   "[]" -> "xs"
-                   "->" -> "f"
-                   _ -> "x"
+givenVar tr = GivenVar (namePrefix tr) (T.pack (show tr))
+
+-- | The prefix of the names of the variables of a type: xs for a list, f
+-- for a function, and x for any other type.
+namePrefix :: TypeRep -> Text
+namePrefix tr = case typeConName (typeRepTyCon tr) of
+                  "[]" -> "xs"
+                  "->" -> "f"
+                  _ -> "x"
 
 gvToNameNoType :: GivenInfo -> Text
 gvToNameNoType (GivenVar prefix _ i _) = prefix <> T.pack (show i)
