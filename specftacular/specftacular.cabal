@@ -14,6 +14,13 @@ category: Synthesis
 license: MIT
 license-file: LICENSE
 
+-- Run the tests with this flag (cabal test -f checked-values): an
+-- application of values then tests their types (see Spectacular.Types.Value).
+flag checked-values
+  description: Test the types of the values at each application.
+  default: False
+  manual: True
+
 common deps
   default-language: Haskell2010
   build-depends: base ^>= 4.22,
@@ -28,6 +35,8 @@ common deps
 library
   import: deps
   hs-source-dirs: src
+  if flag(checked-values)
+    cpp-options: -DCHECKED_VALUES
   exposed-modules:
     Spectacular,
     Spectacular.Types,

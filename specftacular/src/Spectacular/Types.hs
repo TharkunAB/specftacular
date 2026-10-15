@@ -2,7 +2,7 @@
              ScopedTypeVariables, TypeApplications, RecordWildCards, GADTs,
              StandaloneDeriving, KindSignatures, PolyKinds, RankNTypes,
              GeneralizedNewtypeDeriving, FlexibleContexts, TupleSections,
-             PatternSynonyms, DeriveGeneric #-}
+             PatternSynonyms, DeriveGeneric, CPP #-}
 
 module Spectacular.Types where
 import Data.Dynamic
@@ -17,7 +17,7 @@ import Data.CFTA.Symbol (Symbol (Symbol))
 import qualified Data.CFTA.Term as CT
 import Data.Proxy
 import Data.Maybe (mapMaybe, fromMaybe)
-import Control.Exception (SomeException, evaluate, try)
+import Control.Exception (Exception, SomeException, evaluate, fromException, throw, throwIO, try)
 import Debug.Trace (trace)
 
 import Test.QuickCheck (Arbitrary(..), Gen(..))
@@ -339,17 +339,62 @@ data DynGen where
 -- when each application fits its argument (see 'termType'), and the values
 -- of A, B, C, D, and Acc have the representation of Int. Thus an
 -- application needs no test of the types.
+--
+-- With the flag checked-values, a value is a 'Dynamic' instead, and an
+-- application tests the types: a function takes an argument of its type, or
+-- of another of A to Acc, and any other application raises 'IllTyped'.
+-- Run the tests in this mode, so that a wrong application fails a test.
+#ifdef CHECKED_VALUES
+newtype Value = Value Dynamic
+#else
 newtype Value = Value Any
+#endif
 
 instance Show Value where
   show _ = "<value>"
 
+-- | An application of a function to an argument of another type, in the
+-- mode checked-values.
+newtype IllTyped = IllTyped String
+  deriving (Show)
+
+instance Exception IllTyped
+
+#ifdef CHECKED_VALUES
 -- | A value as a value of the search.
-toValue :: a -> Value
+toValue :: Typeable a => a -> Value
+toValue = Value . toDyn
+
+-- | A value of the search as a value of its type.
+fromValue :: Typeable a => Value -> a
+fromValue (Value d) = fromMaybe (throw (IllTyped ("not a value of its type: " ++ show (dynTypeRep d)))) (fromDynamic d)
+
+-- | Apply a function to an argument. A, B, C, D, and Acc have the
+-- representation of Int, so a function can take an argument of another of
+-- them.
+apply :: Value -> Value -> Value
+apply (Value df@(Dynamic (TR.Fun ta tr) f)) (Value dx@(Dynamic tx x)) =
+    case dynApply df dx of
+      Just r -> Value r
+      Nothing
+        | sameUpToCarriers (TR.SomeTypeRep ta) (TR.SomeTypeRep tx) -> Value (Dynamic (unsafeCoerce tr) (unsafeCoerce f x))
+        | otherwise -> illTyped df dx
+apply (Value df) (Value dx) = illTyped df dx
+
+-- | The error of an application of two values whose types do not fit.
+illTyped :: Dynamic -> Dynamic -> a
+illTyped df dx = throw (IllTyped ("cannot apply " ++ show (dynTypeRep df) ++ " to " ++ show (dynTypeRep dx)))
+
+-- | The value of a 'Dynamic'.
+dynamicValue :: Dynamic -> Value
+dynamicValue = Value
+#else
+-- | A value as a value of the search.
+toValue :: Typeable a => a -> Value
 toValue = Value . unsafeCoerce
 
 -- | A value of the search as a value of its type.
-fromValue :: Value -> a
+fromValue :: Typeable a => Value -> a
 fromValue (Value x) = unsafeCoerce x
 
 -- | Apply a function to an argument.
@@ -358,7 +403,8 @@ apply (Value f) (Value x) = Value ((unsafeCoerce f :: Any -> Any) x)
 
 -- | The value of a 'Dynamic'.
 dynamicValue :: Dynamic -> Value
-dynamicValue (Dynamic _ x) = toValue x
+dynamicValue (Dynamic _ x) = Value (unsafeCoerce x)
+#endif
 
 -- | A generator of the values of a type: the type of the values, if the
 -- front end knows it, and the value of a seed and a size.
@@ -456,9 +502,10 @@ evalTerm sig tc (Term (Symbol sym) _) =
 -- | The type of the value of a term, from the types of its functions and of
 -- its variables. An application takes an argument of the type of its
 -- function, or of another of A to Acc, which have the representation of
--- Int. Left: an application whose argument does not fit, so the search
--- cannot run the term on untyped values. Right Nothing: a symbol of the term
--- has no type, because its front end does not give types.
+-- Int, as the test of the mode checked-values does (see 'apply'). Left: an
+-- application whose argument does not fit, so the search cannot run the
+-- term on untyped values. Right Nothing: a symbol of the term has no type,
+-- because its front end does not give types.
 termType :: Sig -> Term -> Either String (Maybe TypeRep)
 termType sig (Term "app" [_, f, v]) = do
     tf <- termType sig f
@@ -518,9 +565,11 @@ testSizes n =
 valuesEqual :: Value -> Value -> Value -> IO (Maybe Bool)
 valuesEqual eq a b = do
     r <- try (evaluate (fromValue (apply (apply eq a) b) :: Bool))
-    return $ case r of
-        Left (_ :: SomeException) -> Nothing
-        Right x -> Just x
+    case r of
+        Left (e :: SomeException)
+          | Just (illTyped :: IllTyped) <- fromException e -> throwIO illTyped
+          | otherwise -> return Nothing
+        Right x -> return (Just x)
 
 
 -- TODO: can we kill a branch once a rewriteable term is detected?
