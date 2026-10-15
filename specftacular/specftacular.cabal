@@ -4,6 +4,7 @@ build-type: Simple
 version: 0.0.1
 author: Matthías Páll Gissurarson
 maintainer: mpg@mpg.is
+copyright: 2022-2026 Tharkun AB
 synopsis: ECTA-based QuickSpec
 description:
 
