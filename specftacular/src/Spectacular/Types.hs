@@ -2,7 +2,7 @@
              ScopedTypeVariables, TypeApplications, RecordWildCards, GADTs,
              StandaloneDeriving, KindSignatures, PolyKinds, RankNTypes,
              GeneralizedNewtypeDeriving, FlexibleContexts, TupleSections,
-             PatternSynonyms, DeriveGeneric, CPP #-}
+             PatternSynonyms, DeriveGeneric #-}
 
 module Spectacular.Types where
 import Data.Dynamic
@@ -335,51 +335,62 @@ gvToName _ = error "not a given var!"
 data DynGen where
    DynGen :: forall a. Typeable a => Gen a -> DynGen
 
--- | A value of the search, without its type. The search runs a term only
--- when each application fits its argument (see 'termType'), and the values
--- of A, B, C, D, and Acc have the representation of Int. Thus an
--- application needs no test of the types.
+-- | A value of the search: a 'Dynamic', with its type, or a value without
+-- its type. The front end of Haskell gives typed values. By default the
+-- search makes them untyped once, before its phases (see 'untypedSig'). It
+-- runs a term only when each application fits its argument (see
+-- 'termType'), and the values of A, B, C, D, and Acc have the representation
+-- of Int. Thus an application of untyped values needs no test of the types.
 --
--- With the flag checked-values, a value is a 'Dynamic' instead, and an
--- application tests the types: a function takes an argument of its type, or
--- of another of A to Acc, and any other application raises 'IllTyped'.
--- Run the tests in this mode, so that a wrong application fails a test.
-#ifdef CHECKED_VALUES
-newtype Value = Value Dynamic
-#else
-newtype Value = Value Any
-#endif
+-- With SPECFTACULAR_CHECKED=1, the values stay typed, and an application of
+-- two typed values tests the types: a function takes an argument of its
+-- type, or of another of A to Acc, and any other application raises
+-- 'IllTyped'. The golden test runs in this mode too, so that a wrong
+-- application fails a test.
+data Value = Typed Dynamic | Untyped Any
 
 instance Show Value where
   show _ = "<value>"
 
--- | An application of a function to an argument of another type, in the
--- mode checked-values.
+-- | An application of a typed function to a typed argument of another type.
 newtype IllTyped = IllTyped String
   deriving (Show)
 
 instance Exception IllTyped
 
-#ifdef CHECKED_VALUES
--- | A value as a value of the search.
+-- | A value as a typed value of the search.
 toValue :: Typeable a => a -> Value
-toValue = Value . toDyn
+toValue = Typed . toDyn
 
 -- | A value of the search as a value of its type.
 fromValue :: Typeable a => Value -> a
-fromValue (Value d) = fromMaybe (throw (IllTyped ("not a value of its type: " ++ show (dynTypeRep d)))) (fromDynamic d)
+fromValue (Typed d) = fromMaybe (throw (IllTyped ("not a value of its type: " ++ show (dynTypeRep d)))) (fromDynamic d)
+fromValue (Untyped x) = unsafeCoerce x
 
--- | Apply a function to an argument. A, B, C, D, and Acc have the
--- representation of Int, so a function can take an argument of another of
--- them.
+-- | Apply a function to an argument. When both are typed, A, B, C, D, and
+-- Acc have the representation of Int, so a function can take an argument of
+-- another of them, and any other difference raises 'IllTyped'. When one of
+-- them is untyped, the application has no test. Two untyped values come
+-- first, as in the search without SPECFTACULAR_CHECKED.
 apply :: Value -> Value -> Value
-apply (Value df@(Dynamic (TR.Fun ta tr) f)) (Value dx@(Dynamic tx x)) =
+apply (Untyped f) (Untyped x) = Untyped ((unsafeCoerce f :: Any -> Any) x)
+apply (Typed df@(Dynamic (TR.Fun ta tr) f)) (Typed dx@(Dynamic tx x)) =
     case dynApply df dx of
-      Just r -> Value r
+      Just r -> Typed r
       Nothing
-        | sameUpToCarriers (TR.SomeTypeRep ta) (TR.SomeTypeRep tx) -> Value (Dynamic (unsafeCoerce tr) (unsafeCoerce f x))
+        | sameUpToCarriers (TR.SomeTypeRep ta) (TR.SomeTypeRep tx) -> Typed (Dynamic (unsafeCoerce tr) (unsafeCoerce f x))
         | otherwise -> illTyped df dx
-apply (Value df) (Value dx) = illTyped df dx
+apply (Typed df) (Typed dx) = illTyped df dx
+apply f x = Untyped ((unsafeCoerce (rawValue f) :: Any -> Any) (rawValue x))
+
+-- | The representation of a value, without its type.
+rawValue :: Value -> Any
+rawValue (Typed (Dynamic _ x)) = unsafeCoerce x
+rawValue (Untyped x) = x
+
+-- | The value without its type.
+untyped :: Value -> Value
+untyped = Untyped . rawValue
 
 -- | The error of an application of two values whose types do not fit.
 illTyped :: Dynamic -> Dynamic -> a
@@ -387,24 +398,7 @@ illTyped df dx = throw (IllTyped ("cannot apply " ++ show (dynTypeRep df) ++ " t
 
 -- | The value of a 'Dynamic'.
 dynamicValue :: Dynamic -> Value
-dynamicValue = Value
-#else
--- | A value as a value of the search.
-toValue :: Typeable a => a -> Value
-toValue = Value . unsafeCoerce
-
--- | A value of the search as a value of its type.
-fromValue :: Typeable a => Value -> a
-fromValue (Value x) = unsafeCoerce x
-
--- | Apply a function to an argument.
-apply :: Value -> Value -> Value
-apply (Value f) (Value x) = Value ((unsafeCoerce f :: Any -> Any) x)
-
--- | The value of a 'Dynamic'.
-dynamicValue :: Dynamic -> Value
-dynamicValue (Dynamic _ x) = Value (unsafeCoerce x)
-#endif
+dynamicValue = Typed
 
 -- | A generator of the values of a type: the type of the values, if the
 -- front end knows it, and the value of a seed and a size.
@@ -502,10 +496,10 @@ evalTerm sig tc (Term (Symbol sym) _) =
 -- | The type of the value of a term, from the types of its functions and of
 -- its variables. An application takes an argument of the type of its
 -- function, or of another of A to Acc, which have the representation of
--- Int, as the test of the mode checked-values does (see 'apply'). Left: an
--- application whose argument does not fit, so the search cannot run the
--- term on untyped values. Right Nothing: a symbol of the term has no type,
--- because its front end does not give types.
+-- Int, as 'apply' tests it for two typed values. Left: an application
+-- whose argument does not fit, so the search cannot run the term on untyped
+-- values. Right Nothing: a symbol of the term has no type, because its front
+-- end does not give types.
 termType :: Sig -> Term -> Either String (Maybe TypeRep)
 termType sig (Term "app" [_, f, v]) = do
     tf <- termType sig f
@@ -534,6 +528,23 @@ equalityFits _ _ = True
 generatorType :: Generator -> Maybe TypeRep
 generatorType (Generator t _) = t
 
+-- | A signature with untyped values (see 'Value'): its functions, its
+-- equalities, and the values of its generators.
+untypedSig :: Sig -> Sig
+untypedSig = fmap untypedFunc
+  where untypedFunc f@(SigFunc {sf_func = v}) = f {sf_func = untyped v}
+        untypedFunc f@(GenFunc {gf_func = v}) = f {gf_func = untyped v}
+        untypedFunc (GivenFun (GivenInst t v ty) r) = GivenFun (GivenInst t (untyped v) ty) r
+        untypedFunc (GivenFun (GivenVar p t i g) r) = GivenFun (GivenVar p t i (untypedGenerator g)) r
+
+-- | An instance with untyped values.
+untypedInstance :: Instance -> Instance
+untypedInstance inst = inst { inst_gen = untypedGenerator (inst_gen inst), inst_eq = untyped <$> inst_eq inst }
+
+-- | A generator of untyped values.
+untypedGenerator :: Generator -> Generator
+untypedGenerator (Generator t g) = Generator t (\seed size -> untyped (g seed size))
+
 -- | The test cases of a signature: a value for each generated variable.
 -- Test case k has the size k of 'testSizes'. Each variable takes its value
 -- from a seed of its own, so a variable has the same values in each phase.
@@ -560,11 +571,17 @@ testSizes n =
     uniform m k = concat [ replicate (m `div` k) i | i <- [0 .. k - 1] ]
                   ++ [ i * k `div` (m `mod` k) | i <- [0 .. m `mod` k - 1] ]
 
+-- | Whether two values are equal by an equality. Untyped values compare
+-- without the tests of 'apply'.
+equalBy :: Value -> Value -> Value -> Bool
+equalBy (Untyped eq) (Untyped a) (Untyped b) = (unsafeCoerce eq :: Any -> Any -> Bool) a b
+equalBy eq a b = fromValue (apply (apply eq a) b)
+
 -- | Whether two values are equal, by the equality of their type. Nothing
 -- means that the comparison threw an exception.
 valuesEqual :: Value -> Value -> Value -> IO (Maybe Bool)
 valuesEqual eq a b = do
-    r <- try (evaluate (fromValue (apply (apply eq a) b) :: Bool))
+    r <- try (evaluate (equalBy eq a b))
     case r of
         Left (e :: SomeException)
           | Just (illTyped :: IllTyped) <- fromException e -> throwIO illTyped
