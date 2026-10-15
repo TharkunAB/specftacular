@@ -1,10 +1,12 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving, OverloadedStrings #-}
 -- | Golden tests. Each case runs a small signature and compares the laws
--- with a file in test/golden. Set GOLDEN_ACCEPT=1 to write the files again.
+-- with a file in test/golden. Each case runs twice: on untyped values, and
+-- with the test of the types at each application (SPECFTACULAR_CHECKED=1).
+-- Set GOLDEN_ACCEPT=1 to write the files again.
 module Main (main) where
 
-import Control.Monad (unless)
-import System.Environment (lookupEnv)
+import Control.Monad (unless, when)
+import System.Environment (lookupEnv, setEnv, unsetEnv)
 import System.Exit (exitFailure)
 import Test.QuickCheck (Arbitrary (..), CoArbitrary, suchThat)
 
@@ -50,23 +52,32 @@ cases =
       , con "gcd" (gcd :: PosInt -> PosInt -> PosInt) ])
   ]
 
--- | Run one case. Return whether its laws equal the golden file.
+-- | Run one case on untyped values and on checked values. Return whether
+-- the laws of both runs equal the golden file.
 check :: Bool -> (String, IO [String]) -> IO Bool
 check accept (name, run) = do
+  unsetEnv "SPECFTACULAR_CHECKED"
   laws <- run
+  setEnv "SPECFTACULAR_CHECKED" "1"
+  checkedLaws <- run
+  unsetEnv "SPECFTACULAR_CHECKED"
   let file = "test/golden/" ++ name ++ ".laws"
-  if accept
-    then writeFile file (unlines laws) >> return True
-    else do
-      expected <- lines <$> readFile file
-      let same = expected == laws
-      unless same $ do
-        putStrLn ("FAIL " ++ name ++ ": the laws differ from " ++ file)
-        putStrLn "expected:"
-        mapM_ putStrLn expected
-        putStrLn "actual:"
-        mapM_ putStrLn laws
-      return same
+  when accept $ writeFile file (unlines laws)
+  expected <- lines <$> readFile file
+  and <$> mapM (same file expected) [(name, laws), (name ++ " (checked)", checkedLaws)]
+
+-- | Whether the laws of a run equal the golden file. Print both when they
+-- differ.
+same :: FilePath -> [String] -> (String, [String]) -> IO Bool
+same file expected (name, laws) = do
+  let equal = expected == laws
+  unless equal $ do
+    putStrLn ("FAIL " ++ name ++ ": the laws differ from " ++ file)
+    putStrLn "expected:"
+    mapM_ putStrLn expected
+    putStrLn "actual:"
+    mapM_ putStrLn laws
+  return equal
 
 main :: IO ()
 main = do
