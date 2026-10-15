@@ -189,9 +189,9 @@ discoverMonomorphic size = experimentalPhases size 1
 
 -- | The laws of a signature, with the phases from 1 to the given phase.
 -- Phases 2 to 4 are experimental. Phase 2 keeps A, B, C, D, and Acc apart.
--- Phases 3 and 4 generalize the types of the functions. A test that needs a
--- value at a type other than its own, apart from A to Acc, is untestable
--- (see 'unsafeApply').
+-- Phases 3 and 4 generalize the types of the functions, so a term can apply
+-- a value to an argument of another type. The search does not test such a
+-- term (see 'termType').
 experimentalPhases :: Int -> Int -> (TypeSkeleton -> Maybe GeneratedInstance) -> [Sig] -> IO [String]
 experimentalPhases size phase extraReps sigs =
     do -- SPECFTACULAR_PROGRESS=1 shows the progress of the search on stderr.
@@ -364,6 +364,9 @@ consider Settings{..} StEcta{..} lvl full_term s0
      | termSize np_term > 1,
         allFromSig given_sig np_term =
         return ([], s0 { so_far = so_far s0 + 1, seen = HS.insert np_term (seen s0) })
+     -- An application of the schema does not fit its argument, or its
+     -- equality does not fit its values, so the search does not test it.
+     | not (testable np_term) = return ([], s0 { so_far = so_far s0 + 1 })
      | otherwise = do
         let tree = Map.findWithDefault DT.empty current_ty (trees s0)
         refreshCount progress ("exploring " ++ show current_ty) ""
@@ -398,6 +401,9 @@ consider Settings{..} StEcta{..} lvl full_term s0
         term_eq_insts = Map.fromList $ map (Bi.first typeSkeletonToTerm)
                                      $ Map.assocs eq_insts
         (eq_txt, eq_inst) = term_eq_insts Map.! current_ty
+        -- Whether the tests of a term can run: its applications fit their
+        -- arguments, and its equality fits its values.
+        testable t = either (const False) (equalityFits (equalityType eq_inst)) (termType inst_sig t)
         -- The values of a term on the test cases, evaluated when needed.
         values u = map (\tc -> evalTerm inst_sig tc u) test_cases
 
@@ -433,6 +439,7 @@ consider Settings{..} StEcta{..} lvl full_term s0
         -- schema rep. Print the law that the test finds, and add its rules.
         exploreInstance rep i s
             | reducible isVar (rewrite_rules s) i = return (Knew, s)
+            | not (testable i) = return (Knew, s)
             | otherwise = do
                 let table = Map.findWithDefault DT.empty rep (instance_trees s)
                 inserted <- DT.insert (valuesEqual eq_inst) i (values i) table

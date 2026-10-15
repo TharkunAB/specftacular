@@ -417,6 +417,42 @@ evalTerm sig tc (Term (Symbol sym) _) =
       Just f@(GenFunc {}) -> sfFunc f
       _ -> error ("evalTerm: symbol not found: " ++ T.unpack sym)
 
+-- | The type of the value of a term, from the types of its functions and of
+-- its variables. An application takes an argument of the type of its
+-- function, or of another of A to Acc, which have the representation of
+-- Int, as 'unsafeApply' does. Left: an application whose argument does not
+-- fit, so that each test of the term fails. Right Nothing: a symbol of the
+-- term has no type.
+termType :: Sig -> Term -> Either String (Maybe TypeRep)
+termType sig (Term "app" [_, f, v]) = do
+    tf <- termType sig f
+    tv <- termType sig v
+    case (tf, tv) of
+      (Just a, Just b) -> Just <$> applied a b
+      _ -> Right Nothing
+  where
+    applied (TR.SomeTypeRep (TR.Fun ta tr)) tx
+      | TR.SomeTypeRep ta == tx || sameUpToCarriers (TR.SomeTypeRep ta) tx = Right (TR.SomeTypeRep tr)
+    applied tf tx = Left ("cannot apply " ++ show tf ++ " to " ++ show tx)
+termType sig (Term (Symbol sym) _) = Right $ case sig Map.!? sym of
+    Just f@(SigFunc {}) -> Just (dynTypeRep (sfFunc f))
+    Just f@(GenFunc {}) -> Just (dynTypeRep (sfFunc f))
+    Just (GivenFun {given_info = GivenVar tr _ _}) -> Just tr
+    _ -> Nothing
+
+-- | Whether an equality of the values of a type can compare the values of a
+-- term of a type: the types are equal, or they differ only in A to Acc, as
+-- in an application (see 'termType'). A type that is not known fits.
+equalityFits :: Maybe TypeRep -> Maybe TypeRep -> Bool
+equalityFits (Just t) (Just u) = t == u || sameUpToCarriers t u
+equalityFits _ _ = True
+
+-- | The type of the values that an equality compares.
+equalityType :: Dynamic -> Maybe TypeRep
+equalityType eq = case dynTypeRep eq of
+    TR.SomeTypeRep (TR.Fun ta _) -> Just (TR.SomeTypeRep ta)
+    _ -> Nothing
+
 -- | The test cases of a signature: a value for each generated variable.
 -- Test case k has the size k of 'testSizes'. Each variable takes its value
 -- from a seed of its own, so a variable has the same values in each phase.
