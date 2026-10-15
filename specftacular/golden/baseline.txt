@@ -1,6 +1,6 @@
 Baseline of the laws that Specftacular finds.
 
-GHC 9.14.1, cfta 239feb64, on the WSL2 development machine, for
+GHC 9.14.1, cfta 2ca1644c, on the WSL2 development machine, for
 the code of the commit that holds this file. Each run is phase 1 with
 the fixed QuickCheck seed, so the laws are the same in each run. The
 law files hold the numbered law lines of the output. The last two
@@ -8,10 +8,10 @@ runs are the timing cells: compare their allocation and their time
 before and after a change.
 
 run              program            args  laws  elapsed s    bytes allocated  max residency
-gcd-3-1          example-gcd                 6      0.011         22,323,568      1,143,760
-list-monad-5-1   bench-list-monad   5 1      4      0.030         62,651,104      2,547,376
-lists-5-1        bench-lists        5 1     13      0.107        175,783,408      6,658,288
-octonions-4-1    bench-octonions    4 1      5      0.216        320,340,784      2,666,128
-regex-4-1        bench-regex        4 1     17      5.265     41,062,542,896      3,020,744
-lists-9-1        bench-lists        9 1     15     17.148     85,954,858,000    194,686,576
-huge-lists-7-1   bench-huge-lists   7 1    118     22.294     48,541,080,864    388,306,096
+gcd-3-1          example-gcd                 6      0.021         22,130,032      1,143,368
+list-monad-5-1   bench-list-monad   5 1      4      0.049         62,305,736      2,547,248
+lists-5-1        bench-lists        5 1     13      0.178        173,775,848      6,672,752
+octonions-4-1    bench-octonions    4 1      5      0.427        320,146,576      2,669,848
+regex-4-1        bench-regex        4 1     17      6.315     41,060,989,128      3,037,336
+lists-9-1        bench-lists        9 1     15     20.301     85,325,112,992    169,491,088
+huge-lists-7-1   bench-huge-lists   7 1    118     17.418     47,619,637,112    356,962,984

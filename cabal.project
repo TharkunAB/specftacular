@@ -12,5 +12,5 @@ packages: specftacular/
 source-repository-package
     type: git
     location: https://github.com/TharkunAB/cfta.git
-    tag: 239feb6477ecf352c696ed4d63a450fb4008e1ac
+    tag: 2ca1644c908b41567e57f396c7e00befc692bae7
     subdir: cfta cfta-generator cfta-ghc
