@@ -1,0 +1,52 @@
+cabal-version: 3.0
+name: specftacular-ghc
+build-type: Simple
+version: 0.0.1
+author: Matthías Páll Gissurarson
+maintainer: mpg@mpg.is
+copyright: 2022-2026 Tharkun AB
+synopsis: Specftacular signatures from a GHC session
+description:
+
+  The signatures of Specftacular from a GHC session: the functions by their
+  expressions, with the types that GHC gives them. This is a package of its
+  own, so that specftacular does not depend on ghc.
+
+category: Synthesis
+license: MIT
+license-file: LICENSE
+
+common deps
+  default-language: Haskell2010
+  build-depends: base ^>= 4.22,
+                 text,
+                 specftacular
+
+library
+  import: deps
+  hs-source-dirs: src
+  exposed-modules:
+    Spectacular.GHC
+  build-depends: containers,
+                 QuickCheck >= 2.15 && < 2.19,
+                 directory,
+                 filepath,
+                 ghc,
+                 cfta-generator,
+                 cfta-ghc
+
+-- The benchmark signatures from a GHC session. Each takes the size and the
+-- phase as arguments.
+common bench
+  import: deps
+  hs-source-dirs: benchmarks
+  ghc-options: -O2 -threaded -rtsopts
+  build-depends: specftacular-ghc
+
+executable bench-lists-ghc
+  import: bench
+  main-is: ListsGhc.hs
+
+executable bench-huge-lists-ghc
+  import: bench
+  main-is: HugeListsGhc.hs
