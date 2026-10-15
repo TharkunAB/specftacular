@@ -200,12 +200,19 @@ experimentalPhases size phase extraReps sigs = searchPhases size phase (frontIns
 -- for a front end that does not give the types of the values to Haskell,
 -- such as a GHC session.
 searchPhases :: Int -> Int -> (TypeSkeleton -> Maybe Instance) -> Sig -> IO [String]
-searchPhases size phase instances sig =
+searchPhases size phase givenInstances givenSig =
     do -- SPECFTACULAR_PROGRESS=1 shows the progress of the search on stderr.
        progress <- (== Just "1") <$> Env.lookupEnv "SPECFTACULAR_PROGRESS"
        -- SPECFTACULAR_TESTS sets the number of test cases (1000 by default,
        -- as in QuickSpec).
        numTests <- fromMaybe 1000 . (>>= TR.readMaybe) <$> Env.lookupEnv "SPECFTACULAR_TESTS"
+       -- SPECFTACULAR_CHECKED=1 keeps the types of the values, and tests
+       -- them at each application (see 'Value').
+       checked <- (== Just "1") <$> Env.lookupEnv "SPECFTACULAR_CHECKED"
+       let sig | checked = givenSig
+               | otherwise = untypedSig givenSig
+           instances | checked = givenInstances
+                     | otherwise = fmap untypedInstance . givenInstances
        let StEcta { compl_sig = compl_sig,
                     arb_insts = arb_insts,
                     sig_ty_cons = sig_ty_cons} = mkStecta size numTests instances sig id id
