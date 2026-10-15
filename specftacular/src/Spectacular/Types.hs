@@ -137,19 +137,17 @@ instanceTypes typeMod sigs = nubOrd $ concatMap addLi $ Set.toList $ Set.unions 
                  where t' = TCons "[]" [t]
 
 sigGivens :: (TypeSkeleton -> TypeSkeleton) -> Sig -> (TypeSkeleton -> Maybe Instance)
-          -> (Sig, Map TypeSkeleton (Text, Value, Maybe TypeRep) , Map TypeSkeleton (Text,Func))
+          -> (Sig, Map TypeSkeleton (Text, Value) , Map TypeSkeleton (Text,Func))
 sigGivens typeMod sigs instances = (
                    Map.fromList (mapMaybe consName allCons)
                  , eq_insts
                  , arbs)
   where user_eq = mapMaybe g_eq $ Map.assocs sigs
-          where g_eq (k, GivenFun (GivenInst _ eq t) tsk)  = Just (tsk, (k, eq, t))
+          where g_eq (k, GivenFun (GivenInst _ eq) tsk)  = Just (tsk, (k, eq))
                 g_eq _ = Nothing
         eq_insts = Map.fromList $ user_eq ++
-                    mapMaybe (\c -> (c,) . equality <$> toEqInst c)
+                    mapMaybe (\c -> (c,) . fmap sfFunc <$> toEqInst c)
                              (filter isCon allCons)
-        equality (k, GivenFun (GivenInst _ eq t) _) = (k, eq, t)
-        equality (k, f) = (k, sfFunc f, Nothing)
         user_arbs = mapMaybe g_arb $ Map.assocs sigs
           where g_arb (k, f@(GivenFun (GivenVar {})  tsk)) = Just (tsk, (k,f))
                 g_arb _ = Nothing
@@ -163,7 +161,7 @@ sigGivens typeMod sigs instances = (
         toEqInst e | Just inst <- instances e,
                      Just eqf <- inst_eq inst = g inst eqf
            where g inst eqf = Just ("<@Eq_" <> inst_text inst <> "@>",
-                                    GivenFun (GivenInst (inst_text inst) eqf (generatorType (inst_gen inst)))
+                                    GivenFun (GivenInst (inst_text inst) eqf)
                                     $ TCons "Eq" [e])
         toEqInst _ = Nothing
 
@@ -176,7 +174,7 @@ addExplicitEquality :: Typeable a => (a -> a -> Bool) -> Sig
 addExplicitEquality (fun :: a -> a -> Bool) = Map.singleton key val
   where g_tr = typeRep (Proxy :: Proxy a)
         key = "<@Eq_"<>(T.pack $ show g_tr)<>"@>"
-        val = GivenFun (GivenInst (T.pack (show g_tr)) (toValue fun) (Just g_tr)) $
+        val = GivenFun (GivenInst (T.pack (show g_tr)) (toValue fun)) $
                         TCons "Eq" [typeRepToTypeSkeleton g_tr]
 
         
@@ -185,7 +183,7 @@ addEquality :: (Eq a, Typeable a) => Proxy a -> Sig
 addEquality (Proxy :: Proxy a) = Map.singleton key val
   where g_tr = typeRep (Proxy :: Proxy a)
         key = "<@Eq_"<>(T.pack $ show g_tr)<>"@>"
-        val = GivenFun (GivenInst (T.pack (show g_tr)) (toValue ((==) :: a -> a -> Bool)) (Just g_tr)) $
+        val = GivenFun (GivenInst (T.pack (show g_tr)) (toValue ((==) :: a -> a -> Bool))) $
                         TCons "Eq" [typeRepToTypeSkeleton g_tr]
 
 addArbitrary :: (Typeable a, Arbitrary a) => Proxy a -> Sig
@@ -287,11 +285,9 @@ type Sig = Map Text Func
 
 -- | A function of the signature, and its type.
 data Func = SigFunc { sf_func :: Value
-                    , sf_rep :: TypeSkeleton
-                    , sf_type :: Maybe TypeRep}
+                    , sf_rep :: TypeSkeleton}
           | GenFunc { gf_func :: Value
-                    , gf_rep :: TypeSkeleton
-                    , gf_type :: Maybe TypeRep}
+                    , gf_rep :: TypeSkeleton}
           | GivenFun {given_info :: GivenInfo, giv_rep :: TypeSkeleton}
           deriving (Show)
 
@@ -301,11 +297,10 @@ moreGenerators (GivenFun (GivenVar prefix ty _ g) grep) =
 moreGenerators _ = []
 
 -- | What the search gives a signature: an equality, with the type as
--- 'TypeRep' shows it and the type of the values that it compares, if the
--- front end knows it, or a variable, with the prefix of its name, the type
+-- 'TypeRep' shows it, or a variable, with the prefix of its name, the type
 -- as 'TypeRep' shows it, its index, and the generator of its values.
 data GivenInfo
-    = GivenInst Text Value (Maybe TypeRep)
+    = GivenInst Text Value
     | GivenVar Text Text Int Generator
     deriving (Show)
 
@@ -378,7 +373,8 @@ apply (Typed df@(Dynamic (TR.Fun ta tr) f)) (Typed dx@(Dynamic tx x)) =
     case dynApply df dx of
       Just r -> Typed r
       Nothing
-        | sameUpToCarriers (TR.SomeTypeRep ta) (TR.SomeTypeRep tx) -> Typed (Dynamic (unsafeCoerce tr) (unsafeCoerce f x))
+        | sameUpToCarriers (typeRepToTypeSkeleton (TR.SomeTypeRep ta)) (typeRepToTypeSkeleton (TR.SomeTypeRep tx)) ->
+            Typed (Dynamic (unsafeCoerce tr) (unsafeCoerce f x))
         | otherwise -> illTyped df dx
 apply (Typed df) (Typed dx) = illTyped df dx
 apply f x = Untyped ((unsafeCoerce (rawValue f) :: Any -> Any) (rawValue x))
@@ -400,9 +396,8 @@ illTyped df dx = throw (IllTyped ("cannot apply " ++ show (dynTypeRep df) ++ " t
 dynamicValue :: Dynamic -> Value
 dynamicValue = Typed
 
--- | A generator of the values of a type: the type of the values, if the
--- front end knows it, and the value of a seed and a size.
-data Generator = Generator (Maybe TypeRep) (Int -> Int -> Value)
+-- | A generator of the values of a type: the value of a seed and a size.
+newtype Generator = Generator (Int -> Int -> Value)
 
 instance Show Generator where
   show _ = "<generator>"
@@ -410,24 +405,24 @@ instance Show Generator where
 -- | The generator of a generator of QuickCheck: unGen with the seed through
 -- mkQCGen.
 generator :: DynGen -> Generator
-generator (DynGen (g :: Gen a)) = Generator (Just (typeRep (Proxy :: Proxy a))) (\seed size -> toValue (unGen g (mkQCGen seed) size))
+generator (DynGen g) = Generator (\seed size -> toValue (unGen g (mkQCGen seed) size))
 
 -- ConFunc comes from the user provided signature, and we want at least
 -- one of these to show up.
 conFunc :: Dynamic -> Func
-conFunc f = SigFunc {sf_func = dynamicValue f, sf_rep = typeRepToTypeSkeleton (dynTypeRep f), sf_type = Just (dynTypeRep f)}
+conFunc f = SigFunc {sf_func = dynamicValue f, sf_rep = typeRepToTypeSkeleton (dynTypeRep f)}
 
 -- extraFuncs are from generators like arith, but we don't *require* them,
 -- they're just extra.
 extraFunc :: Dynamic -> Func
-extraFunc f = GenFunc {gf_func = dynamicValue f, gf_rep = typeRepToTypeSkeleton (dynTypeRep f), gf_type = Just (dynTypeRep f)}
+extraFunc f = GenFunc {gf_func = dynamicValue f, gf_rep = typeRepToTypeSkeleton (dynTypeRep f)}
 
 
 sfFunc :: Func -> Value
 sfFunc (SigFunc {..}) = sf_func
 sfFunc (GenFunc {..}) = gf_func
 -- Should not happen
-sfFunc (GivenFun {given_info = GivenInst _ inst_f _}) = inst_f
+sfFunc (GivenFun {given_info = GivenInst _ inst_f}) = inst_f
 sfFunc (GivenFun {}) = toValue ()
 
 sfTypeRep :: Func -> TypeSkeleton
@@ -466,19 +461,13 @@ toTemplate sig (Term (Symbol s) ty) |
 toTemplate sig (Term s args) = Term s $ map (toTemplate sig) args
  
 -- | Whether two types are equal when A, B, C, D, and Acc are one type.
-sameUpToCarriers :: TypeRep -> TypeRep -> Bool
-sameUpToCarriers a b
-  | isCarrier ca && isCarrier cb = True
-  | otherwise = ca == cb && length as == length bs && and (zipWith sameUpToCarriers as bs)
-  where (ca, as) = splitTyConApp a
-        (cb, bs) = splitTyConApp b
-        isCarrier c = c `elem` carrierTyCons
-
--- | The type constructors of A, B, C, D, and Acc.
-carrierTyCons :: [TyCon]
-carrierTyCons =
-  [ tyConOf (Proxy :: Proxy A), tyConOf (Proxy :: Proxy B), tyConOf (Proxy :: Proxy C)
-  , tyConOf (Proxy :: Proxy D), tyConOf (Proxy :: Proxy Acc) ]
+sameUpToCarriers :: TypeSkeleton -> TypeSkeleton -> Bool
+sameUpToCarriers a b | isCarrier a && isCarrier b = True
+  where isCarrier t = t `elem` map fst carriers
+sameUpToCarriers (TCons ca as) (TCons cb bs) =
+    ca == cb && length as == length bs && and (zipWith sameUpToCarriers as bs)
+sameUpToCarriers (TFun a r) (TFun b s) = sameUpToCarriers a b && sameUpToCarriers r s
+sameUpToCarriers a b = a == b
 
 
 -- | The value of a term on a test case.
@@ -488,7 +477,7 @@ evalTerm sig tc (Term (Symbol sym) _) =
     case sig Map.!? sym of
       Just (GivenFun {given_info = GivenVar {}}) ->
           fromMaybe (error "evalTerm: variable not found") (tc Map.!? sym)
-      Just (GivenFun {given_info = GivenInst _ inst _}) -> inst
+      Just (GivenFun {given_info = GivenInst _ inst}) -> inst
       Just f@(SigFunc {}) -> sfFunc f
       Just f@(GenFunc {}) -> sfFunc f
       _ -> error ("evalTerm: symbol not found: " ++ T.unpack sym)
@@ -498,35 +487,17 @@ evalTerm sig tc (Term (Symbol sym) _) =
 -- function, or of another of A to Acc, which have the representation of
 -- Int, as 'apply' tests it for two typed values. Left: an application
 -- whose argument does not fit, so the search cannot run the term on untyped
--- values. Right Nothing: a symbol of the term has no type, because its front
--- end does not give types.
-termType :: Sig -> Term -> Either String (Maybe TypeRep)
+-- values. The types are the type skeletons of the functions and the
+-- variables, which every front end gives, so the test needs no 'TypeRep'.
+termType :: Sig -> Term -> Either String TypeSkeleton
 termType sig (Term "app" [_, f, v]) = do
     tf <- termType sig f
     tv <- termType sig v
-    case (tf, tv) of
-      (Just a, Just b) -> Just <$> applied a b
-      _ -> Right Nothing
-  where
-    applied (TR.SomeTypeRep (TR.Fun ta tr)) tx
-      | TR.SomeTypeRep ta == tx || sameUpToCarriers (TR.SomeTypeRep ta) tx = Right (TR.SomeTypeRep tr)
-    applied tf tx = Left ("cannot apply " ++ show tf ++ " to " ++ show tx)
-termType sig (Term (Symbol sym) _) = Right $ case sig Map.!? sym of
-    Just (SigFunc {sf_type = t}) -> t
-    Just (GenFunc {gf_type = t}) -> t
-    Just (GivenFun {given_info = GivenVar _ _ _ (Generator t _)}) -> t
-    _ -> Nothing
-
--- | Whether an equality of the values of a type can compare the values of a
--- term of a type: the types are equal, or they differ only in A to Acc, as
--- in an application (see 'termType'). A type that is not known fits.
-equalityFits :: Maybe TypeRep -> Maybe TypeRep -> Bool
-equalityFits (Just t) (Just u) = t == u || sameUpToCarriers t u
-equalityFits _ _ = True
-
--- | The type of the values of a generator, if the front end knows it.
-generatorType :: Generator -> Maybe TypeRep
-generatorType (Generator t _) = t
+    case tf of
+      TFun ta tr | sameUpToCarriers ta tv -> Right tr
+      _ -> Left ("cannot apply " ++ show tf ++ " to " ++ show tv)
+termType sig (Term (Symbol sym) _) =
+    maybe (Left ("no symbol " ++ T.unpack sym)) (Right . sfTypeRep) (sig Map.!? sym)
 
 -- | A signature with untyped values (see 'Value'): its functions, its
 -- equalities, and the values of its generators.
@@ -534,7 +505,7 @@ untypedSig :: Sig -> Sig
 untypedSig = fmap untypedFunc
   where untypedFunc f@(SigFunc {sf_func = v}) = f {sf_func = untyped v}
         untypedFunc f@(GenFunc {gf_func = v}) = f {gf_func = untyped v}
-        untypedFunc (GivenFun (GivenInst t v ty) r) = GivenFun (GivenInst t (untyped v) ty) r
+        untypedFunc (GivenFun (GivenInst t v) r) = GivenFun (GivenInst t (untyped v)) r
         untypedFunc (GivenFun (GivenVar p t i g) r) = GivenFun (GivenVar p t i (untypedGenerator g)) r
 
 -- | An instance with untyped values.
@@ -543,7 +514,7 @@ untypedInstance inst = inst { inst_gen = untypedGenerator (inst_gen inst), inst_
 
 -- | A generator of untyped values.
 untypedGenerator :: Generator -> Generator
-untypedGenerator (Generator t g) = Generator t (\seed size -> untyped (g seed size))
+untypedGenerator (Generator g) = Generator (\seed size -> untyped (g seed size))
 
 -- | The test cases of a signature: a value for each generated variable.
 -- Test case k has the size k of 'testSizes'. Each variable takes its value
@@ -552,7 +523,7 @@ testCases :: Int -> Sig -> [VarVals]
 testCases n sig =
     [ Map.fromList [ (v, value g k size v) | (v, GivenFun {given_info = GivenVar _ _ _ g}) <- Map.assocs sig ]
     | (k, size) <- zip [0 :: Int ..] (testSizes n) ]
-  where value (Generator _ g) k size v = g (hash (k, v)) size
+  where value (Generator g) k size v = g (hash (k, v)) size
 
 -- | The sizes of n test cases, as QuickSpec chooses them (run in
 -- QuickSpec.Internal.Testing.QuickCheck of quickspec-2.2.2). 1% of the test
