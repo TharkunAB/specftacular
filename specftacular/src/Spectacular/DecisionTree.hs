@@ -12,17 +12,15 @@ module Spectacular.DecisionTree (
     size,
 ) where
 
-import Data.Dynamic (Dynamic)
-
-import Spectacular.Types (Term)
+import Spectacular.Types (Term, Value)
 
 -- | A decision tree of terms.
 data DecisionTree
   = -- | A representative, with its values on the test cases from the depth
     -- of the leaf on.
-    Leaf Term [Dynamic]
+    Leaf Term [Value]
   | -- | The children, each with the value on the test case of the depth.
-    Branch [(Dynamic, DecisionTree)]
+    Branch [(Value, DecisionTree)]
 
 -- | The result of an insertion.
 data Inserted
@@ -38,7 +36,7 @@ empty :: DecisionTree
 empty = Branch []
 
 -- | The tree with one representative and its values on all test cases.
-leaf :: Term -> [Dynamic] -> DecisionTree
+leaf :: Term -> [Value] -> DecisionTree
 leaf = Leaf
 
 -- | The number of representatives in a tree.
@@ -48,7 +46,7 @@ size (Branch children) = sum (map (size . snd) children)
 
 -- | Insert a term, with its values on the test cases, into a tree. The
 -- function compares two values; it gives Nothing when the comparison throws.
-insert :: (Dynamic -> Dynamic -> IO (Maybe Bool)) -> Term -> [Dynamic] -> DecisionTree -> IO Inserted
+insert :: (Value -> Value -> IO (Maybe Bool)) -> Term -> [Value] -> DecisionTree -> IO Inserted
 insert equal t vs (Branch children) = case vs of
     [] -> error "DecisionTree.insert: a branch below the last test case"
     v : vs' -> go [] children

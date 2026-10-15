@@ -11,8 +11,8 @@ module Spectacular (
 
 import qualified Data.Map.Strict as Map
 import Data.Map.Strict (Map)
-import Data.Dynamic (Dynamic)
 import qualified Data.Bifunctor as Bi
+import Data.Typeable (TypeRep)
 import Spectacular.Types
 import Spectacular.Utils
 import qualified Spectacular.DecisionTree as DT
@@ -38,7 +38,7 @@ import System.IO (hFlush, hPutStr, hPutStrLn, stderr)
 import Data.Containers.ListUtils (nubOrd)
 
 data StEcta = StEcta { any_arg       :: Node Symbol,
-                      eq_insts      :: Map TypeSkeleton (T.Text, Dynamic),
+                      eq_insts      :: Map TypeSkeleton (T.Text, Value, Maybe TypeRep),
                       arb_insts     :: Map TypeSkeleton (T.Text, Func),
                       sig_ty_cons   :: [TypeSkeleton],
                       compl_sig     :: Sig,
@@ -400,10 +400,10 @@ consider Settings{..} StEcta{..} lvl full_term s0
 
         term_eq_insts = Map.fromList $ map (Bi.first typeSkeletonToTerm)
                                      $ Map.assocs eq_insts
-        (eq_txt, eq_inst) = term_eq_insts Map.! current_ty
+        (eq_txt, eq_inst, eq_type) = term_eq_insts Map.! current_ty
         -- Whether the tests of a term can run: its applications fit their
         -- arguments, and its equality fits its values.
-        testable t = either (const False) (equalityFits (equalityType eq_inst)) (termType inst_sig t)
+        testable t = either (const False) (equalityFits eq_type) (termType inst_sig t)
         -- The values of a term on the test cases, evaluated when needed.
         values u = map (\tc -> evalTerm inst_sig tc u) test_cases
 
