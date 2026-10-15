@@ -17,8 +17,8 @@ import qualified Data.Map.Strict as Map
 import Data.Map.Strict (Map)
 import qualified Data.Text as T
 import Data.Containers.ListUtils (nubOrd)
-import Data.List (permutations, sortOn)
-import Data.Maybe (isJust)
+import Data.List (permutations)
+import Data.Maybe (fromMaybe, isJust)
 import Control.Applicative ((<|>))
 import Data.CFTA.Symbol (Symbol (Symbol))
 
@@ -132,11 +132,15 @@ joinable isVar rules a b = a' == b' || subsumed rules (a', b') || subsumed rules
 groundGreater :: (Symbol -> Bool) -> Term -> Term -> Bool
 groundGreater isVar a b = kboCompare isVar a b == GT
 
--- | Replace the template variables of a template by their terms.
+-- | Replace the template variables of a template by their terms. The types
+-- of a template have no template variables, so the function does not look
+-- into them.
 instantiate :: Map Symbol Term -> Term -> Maybe Term
-instantiate s (Term h args)
+instantiate s (Term "app" [ty, f, v]) =
+    (\f' v' -> Term "app" [ty, f', v']) <$> instantiate s f <*> instantiate s v
+instantiate s t@(Term h _)
     | isTemplateVar h = Map.lookup h s
-    | otherwise = Term h <$> traverse (instantiate s) args
+    | otherwise = Just t
 
 -- | Match a template against a term, and extend the substitution of the
 -- template variables. A template variable matches a term of its type. A
@@ -203,22 +207,33 @@ kboCompare isVar s t = compare (weight s) (weight t) <> sameWeight s t
 kboGreater :: Map Symbol Int -> Term -> Term -> Bool
 kboGreater rank s t =
     ws >= wt
-    && all ((>= 0) . c) unranked && all (>= 0) (scanr1 (+) (map c ranked))
+    && all ((>= 0) . c) unranked
+    && and [ sum [ c x | (x, j) <- ranked, j >= i ] >= 0 | (_, i) <- ranked ]
     && (ws > wt || sameWeight s t)
   where
     ws = weight s
     wt = weight t
-    -- The occurrences of the variables of s, minus those of t.
-    diff = occurrences (-1) t (occurrences 1 s Map.empty)
+    -- The occurrences of the variables of s, minus those of t. A term has
+    -- few variables, so a list is enough.
+    diff = occurrences (-1) t (occurrences 1 s [])
     occurrences n (Term "app" [_, f, v]) m = occurrences n v (occurrences n f m)
     occurrences n (Term x _) m
-        | isTemplateVar x = Map.insertWith (+) x n m
+        | isTemplateVar x = add x n m
         | otherwise = m
-    ranked = sortOn (rank Map.!) (filter (`Map.member` rank) (Map.keys diff))
-    unranked = filter (`Map.notMember` rank) (Map.keys diff)
-    c x = diff Map.! x
+    add x n ((y, k) : rest)
+        | x == y = (y, k + n) : rest
+        | otherwise = (y, k) : add x n rest
+    add x n [] = [(x, n)]
+    -- The ranked variables with their ranks. Each rank needs the sum of c
+    -- over its variables and the variables of the greater ranks.
+    ranked = [ (x, i) | (x, _) <- diff, Just i <- [Map.lookup x rank] ]
+    unranked = [ x | (x, _) <- diff, x `Map.notMember` rank ]
+    c x = fromMaybe 0 (lookup x diff)
+    -- With equal functions, the arguments have equal weights and the same
+    -- occurrences of the variables as s and t, so only their order is left
+    -- to compare.
     sameWeight (Term "app" [_, f, v]) (Term "app" [_, g, u])
-        | f == g = kboGreater rank v u
+        | f == g = sameWeight v u
         | otherwise = kboGreater rank f g
     sameWeight (Term a tys@[_]) (Term b tys'@[_])
         | isTemplateVar a || isTemplateVar b =
